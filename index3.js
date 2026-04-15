@@ -1,59 +1,94 @@
 const mineflayer = require('mineflayer')
 const express = require('express')
+const http = require('http')
+const { Server } = require('socket.io')
 
 const app = express()
+const server = http.createServer(app)
+const io = new Server(server)
+
 const PORT = process.env.PORT || 3000
 
 app.use(express.urlencoded({ extended: true }))
 
 let bot
-let state = {
-  running: false,
-  step: 'idle'
+let running = false
+let logs = []
+
+function log(msg) {
+  console.log(msg)
+  logs.push(msg)
+  if (logs.length > 100) logs.shift()
+  io.emit('log', msg)
 }
 
-// ===== PANEL WWW =====
+// ================= PANEL =================
 app.get('/', (req, res) => {
   res.send(`
-    <h1>🤖 Bot Panel</h1>
-    <p>Status: ${state.step}</p>
+<!DOCTYPE html>
+<html>
+<head>
+<title>Bot Admin Panel</title>
+<style>
+body { font-family: Arial; background:#0f0f0f; color:white; text-align:center; }
+button { padding:10px; margin:5px; cursor:pointer; }
+#logs { background:#111; height:300px; overflow:auto; text-align:left; padding:10px; }
+.card { background:#1c1c1c; padding:20px; margin:20px; border-radius:10px; }
+</style>
+</head>
+<body>
 
-    <form method="POST" action="/start">
-      <button>START SEQUENCE</button>
-    </form>
+<h1>🤖 Admin Bot Panel</h1>
 
-    <form method="POST" action="/stop">
-      <button>STOP</button>
-    </form>
+<div class="card">
+  <button onclick="fetch('/start', {method:'POST'})">🟢 START SEQUENCE</button>
+  <button onclick="fetch('/stop', {method:'POST'})">🔴 STOP</button>
+</div>
+
+<div class="card">
+  <h3>📜 LOGI</h3>
+  <div id="logs"></div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const socket = io()
+const logsDiv = document.getElementById('logs')
+
+socket.on('log', (msg) => {
+  const el = document.createElement('div')
+  el.innerText = msg
+  logsDiv.appendChild(el)
+  logsDiv.scrollTop = logsDiv.scrollHeight
+})
+</script>
+
+</body>
+</html>
   `)
 })
 
-// START
-app.post('/start', (req, res) => {
-  state.running = true
-  state.step = 'starting'
+// ================= ACTIONS =================
+app.post('/start', async (req, res) => {
+  if (running) return res.send('Already running')
 
-  startBotSequence()
+  running = true
+  log('🚀 START SEQUENCE')
 
-  res.redirect('/')
+  startBot()
+  res.sendStatus(200)
 })
 
-// STOP
 app.post('/stop', (req, res) => {
-  state.running = false
-  state.step = 'stopped'
+  running = false
+  log('🛑 STOP')
 
   if (bot) bot.quit()
-
-  res.redirect('/')
+  res.sendStatus(200)
 })
 
-app.listen(PORT, () => {
-  console.log('🌐 Panel działa')
-})
-
-// ===== BOT =====
-function createBot() {
+// ================= BOT =================
+function startBot() {
   bot = mineflayer.createBot({
     host: 'sztabki.gg',
     username: 'BossDawidek12',
@@ -61,63 +96,70 @@ function createBot() {
     auth: 'offline'
   })
 
-  bot.on('error', console.log)
-
-  bot.on('end', () => {
-    console.log('🔄 reconnect...')
-    setTimeout(() => {
-      if (state.running) createBot()
-    }, 5000)
-  })
-}
-
-// ===== SEKWENCJA =====
-async function startBotSequence() {
-  createBot()
+  bot.on('login', () => log('🔑 Logging in...'))
 
   bot.once('spawn', async () => {
-    state.step = 'logged in'
+    log('✅ Spawned')
 
     await sleep(3000)
 
-    bot.chat('/zaloguj haslo123')
+    bot.chat(`/zaloguj ${process.env.PASSWORD || 'haslo123'}`)
+    log('🔐 Login command sent')
 
     await sleep(3000)
 
-    state.step = 'opening compass'
-
-    const compass = bot.inventory.items().find(i =>
-      i.name.includes('compass')
-    )
-
-    if (!compass) return console.log('Brak kompasu')
-
-    await bot.equip(compass, 'hand')
-    bot.activateItem()
-
-    state.step = 'menu opened'
-
-    await sleep(2000)
-
-    const window = bot.currentWindow
-    if (!window) return console.log('Brak GUI')
-
-    const oneblock = window.slots.find(s =>
-      s?.displayName?.toLowerCase().includes('oneblock')
-    )
-
-    if (oneblock) {
-      await bot.clickWindow(oneblock.slot, 0, 0)
-      state.step = 'oneblock selected'
-    }
-
-    await sleep(2000)
-
-    bot.chat('/tpa dawidex3')
-    state.step = 'tp sent'
+    await doCompassSequence()
   })
+
+  bot.on('end', () => {
+    log('🔄 Disconnected')
+    if (running) setTimeout(startBot, 5000)
+  })
+
+  bot.on('error', err => log('❌ ' + err.message))
+}
+
+// ================= SEQUENCE =================
+async function doCompassSequence() {
+  log('🧭 Looking for compass...')
+
+  const compass = bot.inventory.items().find(i =>
+    i.name.includes('compass')
+  )
+
+  if (!compass) return log('❌ No compass')
+
+  await bot.equip(compass, 'hand')
+  log('🧭 Compass equipped')
+
+  bot.activateItem()
+  log('📜 GUI opened')
+
+  await sleep(2000)
+
+  const window = bot.currentWindow
+  if (!window) return log('❌ No window')
+
+  const oneblock = window.slots.find(s =>
+    s?.displayName?.toLowerCase().includes('oneblock')
+  )
+
+  if (oneblock) {
+    await bot.clickWindow(oneblock.slot, 0, 0)
+    log('✅ Oneblock selected')
+  }
+
+  await sleep(2000)
+
+  bot.chat('/tpa dawidex3')
+  log('📩 TPA sent')
 }
 
 function sleep(ms) {
-  return new Promise(res => setTimeout(res, ms))
+  return new Promise(r => setTimeout(r, ms))
 }
+
+// ================= START =================
+server.listen(PORT, () => {
+  log('🌐 Panel online on port ' + PORT)
+})
