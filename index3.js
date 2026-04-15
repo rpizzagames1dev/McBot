@@ -1,162 +1,123 @@
 const mineflayer = require('mineflayer')
-const { pathfinder, Movements, goals } = require('mineflayer-pathfinder')
 const express = require('express')
 
-// === KEEP-ALIVE ===
 const app = express()
 const PORT = process.env.PORT || 3000
 
+app.use(express.urlencoded({ extended: true }))
+
+let bot
+let state = {
+  running: false,
+  step: 'idle'
+}
+
+// ===== PANEL WWW =====
 app.get('/', (req, res) => {
-  res.send('✅ Bot działa 24/7!')
+  res.send(`
+    <h1>🤖 Bot Panel</h1>
+    <p>Status: ${state.step}</p>
+
+    <form method="POST" action="/start">
+      <button>START SEQUENCE</button>
+    </form>
+
+    <form method="POST" action="/stop">
+      <button>STOP</button>
+    </form>
+  `)
+})
+
+// START
+app.post('/start', (req, res) => {
+  state.running = true
+  state.step = 'starting'
+
+  startBotSequence()
+
+  res.redirect('/')
+})
+
+// STOP
+app.post('/stop', (req, res) => {
+  state.running = false
+  state.step = 'stopped'
+
+  if (bot) bot.quit()
+
+  res.redirect('/')
 })
 
 app.listen(PORT, () => {
-  console.log(`🌐 Keep-alive na porcie ${PORT}`)
+  console.log('🌐 Panel działa')
 })
 
-// ================== KONFIGURACJA ==================
-const botConfig = {
-  host: 'sztabki.gg',
-  username: 'BossDawidek12',
-  version: false, // 🔥 AUTO wykrywanie wersji (lepsze!)
-  auth: 'offline'
-}
-
-const PASSWORD = process.env.PASSWORD || 'Masełko123'
-
-let bot
-let autoAttack = false
-let currentTarget = null
-
-function getEntityName(entity) {
-  if (!entity) return 'nieznany'
-  return entity.username || entity.displayName || entity.name || 'mob'
-}
-
-function findBestTarget() {
-  if (!bot?.entity) return null
-
-  let best = null
-  let bestScore = Infinity
-
-  for (const entity of Object.values(bot.entities)) {
-    if (!entity?.position || entity === bot.entity) continue
-
-    const dist = bot.entity.position.distanceTo(entity.position)
-    if (dist > 30) continue
-
-    let score = dist
-    const nameLower = getEntityName(entity).toLowerCase()
-
-    if (entity.type === 'player' && entity.username !== bot.username) {
-      score -= 150
-    } else if (entity.type === 'mob') {
-      const ignored = ['armor_stand', 'item', 'xp_orb', 'arrow']
-      if (ignored.some(i => nameLower.includes(i))) continue
-
-      score -= 60
-      if (nameLower.includes('blaze')) score -= 120
-    } else continue
-
-    if (score < bestScore) {
-      bestScore = score
-      best = entity
-    }
-  }
-
-  return best
-}
-
-function startBot() {
-  console.log('🔥 Bot startuje...')
-
-  bot = mineflayer.createBot(botConfig)
-  bot.loadPlugin(pathfinder)
-
-  bot.on('error', err => {
-    console.log('❌ ERROR:', err)
+// ===== BOT =====
+function createBot() {
+  bot = mineflayer.createBot({
+    host: 'sztabki.gg',
+    username: 'BossDawidek12',
+    version: false,
+    auth: 'offline'
   })
 
-  bot.once('spawn', () => {
-    const mcData = require('minecraft-data')(bot.version)
-    const defaultMove = new Movements(bot, mcData)
-    defaultMove.canDig = false
-    bot.pathfinder.setMovements(defaultMove)
-
-    console.log('✅ Bot zalogowany!')
-  })
-
-  bot.on('message', (jsonMsg) => {
-    const msg = jsonMsg.toString().trim()
-    if (msg) console.log(`[CZAT] ${msg}`)
-
-    if (msg.includes('zarejestruj')) {
-      bot.chat(`/zarejestruj ${PASSWORD} ${PASSWORD}`)
-    }
-    if (msg.includes('zaloguj')) {
-      bot.chat(`/zaloguj ${PASSWORD}`)
-    }
-
-    if (msg.toLowerCase() === 'auto') {
-      autoAttack = !autoAttack
-      currentTarget = null
-      bot.chat(autoAttack ? '⚔️ AUTO ON' : '🛑 AUTO OFF')
-    }
-  })
-
-  // Auto eat
-  setInterval(() => {
-    if (bot.food && bot.food < 15) {
-      const food = bot.inventory.items().find(i =>
-        /apple|bread|steak|porkchop|chicken|mutton/.test(i.name)
-      )
-      if (food) {
-        bot.equip(food, 'hand').then(() => bot.consume())
-      }
-    }
-  }, 10000)
-
-  // Anti-AFK
-  setInterval(() => {
-    if (bot.entity && Math.random() < 0.3) {
-      bot.setControlState('jump', true)
-      setTimeout(() => bot.setControlState('jump', false), 300)
-    }
-  }, 45000)
-
-  // Auto attack
-  setInterval(() => {
-    if (!autoAttack || !bot?.entity) return
-
-    if (!currentTarget || !currentTarget.isValid ||
-        bot.entity.position.distanceTo(currentTarget.position) > 32) {
-      currentTarget = findBestTarget()
-    }
-
-    if (!currentTarget) return
-
-    const dist = bot.entity.position.distanceTo(currentTarget.position)
-
-    if (dist > 4.5) {
-      bot.pathfinder.setGoal(new goals.GoalFollow(currentTarget, 3.8), true)
-    } else {
-      bot.pathfinder.setGoal(null)
-    }
-
-    bot.lookAt(currentTarget.position.offset(0, currentTarget.height * 0.7, 0))
-
-    const now = Date.now()
-    if (!bot._lastAttack || now - bot._lastAttack > 500) {
-      bot.attack(currentTarget)
-      bot._lastAttack = now
-      console.log(`⚔️ Atak`)
-    }
-  }, 150)
+  bot.on('error', console.log)
 
   bot.on('end', () => {
-    console.log('🔄 Restart za 10s...')
-    setTimeout(startBot, 10000)
+    console.log('🔄 reconnect...')
+    setTimeout(() => {
+      if (state.running) createBot()
+    }, 5000)
   })
 }
 
-startBot()
+// ===== SEKWENCJA =====
+async function startBotSequence() {
+  createBot()
+
+  bot.once('spawn', async () => {
+    state.step = 'logged in'
+
+    await sleep(3000)
+
+    bot.chat('/zaloguj haslo123')
+
+    await sleep(3000)
+
+    state.step = 'opening compass'
+
+    const compass = bot.inventory.items().find(i =>
+      i.name.includes('compass')
+    )
+
+    if (!compass) return console.log('Brak kompasu')
+
+    await bot.equip(compass, 'hand')
+    bot.activateItem()
+
+    state.step = 'menu opened'
+
+    await sleep(2000)
+
+    const window = bot.currentWindow
+    if (!window) return console.log('Brak GUI')
+
+    const oneblock = window.slots.find(s =>
+      s?.displayName?.toLowerCase().includes('oneblock')
+    )
+
+    if (oneblock) {
+      await bot.clickWindow(oneblock.slot, 0, 0)
+      state.step = 'oneblock selected'
+    }
+
+    await sleep(2000)
+
+    bot.chat('/tpa dawidex3')
+    state.step = 'tp sent'
+  })
+}
+
+function sleep(ms) {
+  return new Promise(res => setTimeout(res, ms))
+}
