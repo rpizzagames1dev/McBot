@@ -28,7 +28,7 @@ app.get('/', (req, res) => {
 <!DOCTYPE html>
 <html>
 <head>
-<title>Bot Admin Panel</title>
+<title>Admin Bot Panel</title>
 <style>
 body { font-family: Arial; background:#0f0f0f; color:white; text-align:center; }
 button { padding:10px; margin:5px; cursor:pointer; }
@@ -38,7 +38,7 @@ button { padding:10px; margin:5px; cursor:pointer; }
 </head>
 <body>
 
-<h1>🤖 Admin Bot Panel</h1>
+<h1>🤖 Bot Admin Panel</h1>
 
 <div class="card">
   <button onclick="fetch('/start', {method:'POST'})">🟢 START SEQUENCE</button>
@@ -68,9 +68,9 @@ socket.on('log', (msg) => {
   `)
 })
 
-// ================= ACTIONS =================
-app.post('/start', async (req, res) => {
-  if (running) return res.send('Already running')
+// ================= START / STOP =================
+app.post('/start', (req, res) => {
+  if (running) return res.sendStatus(200)
 
   running = true
   log('🚀 START SEQUENCE')
@@ -96,19 +96,23 @@ function startBot() {
     auth: 'offline'
   })
 
-  bot.on('login', () => log('🔑 Logging in...'))
+  bot.on('login', () => log('🔑 Login...'))
 
   bot.once('spawn', async () => {
     log('✅ Spawned')
 
     await sleep(3000)
 
-    bot.chat(`/zaloguj ${process.env.PASSWORD || 'haslo123'}`)
-    log('🔐 Login command sent')
+    try {
+      bot.chat(`/zaloguj ${process.env.PASSWORD || 'haslo123'}`)
+      log('🔐 Login sent')
 
-    await sleep(3000)
+      await sleep(3000)
 
-    await doCompassSequence()
+      await doCompassSequence()
+    } catch (e) {
+      log('❌ spawn error: ' + e.message)
+    }
   })
 
   bot.on('end', () => {
@@ -116,50 +120,69 @@ function startBot() {
     if (running) setTimeout(startBot, 5000)
   })
 
-  bot.on('error', err => log('❌ ' + err.message))
+  bot.on('error', err => log('❌ ERROR: ' + err.message))
+  bot.on('kicked', reason => log('❌ KICK: ' + reason))
 }
 
-// ================= SEQUENCE =================
+// ================= SAFE SEQUENCE =================
 async function doCompassSequence() {
-  log('🧭 Looking for compass...')
+  try {
+    log('🧭 Looking for compass...')
 
-  const compass = bot.inventory.items().find(i =>
-    i.name.includes('compass')
-  )
+    const compass = bot.inventory.items().find(i =>
+      i.name.includes('compass')
+    )
 
-  if (!compass) return log('❌ No compass')
+    if (!compass) {
+      log('❌ No compass')
+      return
+    }
 
-  await bot.equip(compass, 'hand')
-  log('🧭 Compass equipped')
+    await bot.equip(compass, 'hand')
+    log('🧭 Equipped')
 
-  bot.activateItem()
-  log('📜 GUI opened')
+    await sleep(1200)
 
-  await sleep(2000)
+    bot.activateItem()
+    log('📜 GUI open')
 
-  const window = bot.currentWindow
-  if (!window) return log('❌ No window')
+    await sleep(2500)
 
-  const oneblock = window.slots.find(s =>
-    s?.displayName?.toLowerCase().includes('oneblock')
-  )
+    const window = bot.currentWindow
 
-  if (oneblock) {
+    if (!window) {
+      log('❌ No GUI (skip)')
+      return
+    }
+
+    const oneblock = window.slots.find(s =>
+      s?.displayName?.toLowerCase().includes('oneblock')
+    )
+
+    if (!oneblock) {
+      log('❌ No oneblock')
+      return
+    }
+
     await bot.clickWindow(oneblock.slot, 0, 0)
     log('✅ Oneblock selected')
+
+    await sleep(2000)
+
+    bot.chat('/tpa dawidex3')
+    log('📩 TPA sent')
+
+  } catch (err) {
+    log('❌ SEQ ERROR: ' + err.message)
   }
-
-  await sleep(2000)
-
-  bot.chat('/tpa dawidex3')
-  log('📩 TPA sent')
 }
 
+// ================= UTIL =================
 function sleep(ms) {
   return new Promise(r => setTimeout(r, ms))
 }
 
-// ================= START =================
+// ================= START SERVER =================
 server.listen(PORT, () => {
   log('🌐 Panel online on port ' + PORT)
 })
